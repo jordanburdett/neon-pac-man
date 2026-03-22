@@ -28,6 +28,29 @@ export const TileType = {
 } as const;
 export type TileType = typeof TileType[keyof typeof TileType];
 
+export const GhostMode = {
+  SCATTER: 'SCATTER',
+  CHASE: 'CHASE',
+  FRIGHTENED: 'FRIGHTENED',
+  EATEN: 'EATEN',
+} as const;
+export type GhostMode = typeof GhostMode[keyof typeof GhostMode];
+
+export const GhostId = {
+  BLINKY: 'blinky',
+  PINKY: 'pinky',
+  INKY: 'inky',
+  CLYDE: 'clyde',
+} as const;
+export type GhostId = typeof GhostId[keyof typeof GhostId];
+
+export interface ScorePopup {
+  x: number;
+  y: number;
+  value: number;
+  ttl: number;
+}
+
 export interface Vec2 {
   x: number;
   y: number;

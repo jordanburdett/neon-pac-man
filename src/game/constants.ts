@@ -36,3 +36,43 @@ export const GHOST_STARTS = [
   { id: 'inky',   color: '#00FFFF', col: 11, row: 14 },
   { id: 'clyde',  color: '#FFA500', col: 16, row: 14 },
 ] as const;
+
+// Ghost AI constants
+export const GHOST_HOUSE_ENTRY_COL = 13;
+export const GHOST_HOUSE_ENTRY_ROW = 11;
+
+// Mode cycle sequence: [duration_seconds, ...] alternating scatter/chase
+// Indices 0,2,4,6 = scatter; indices 1,3,5,7 = chase (Infinity = indefinite)
+export const MODE_CYCLE_DURATIONS: ReadonlyArray<number> = [7, 20, 7, 20, 5, 20, 5, Infinity];
+
+// Ghost release dot thresholds (total pellets eaten when ghost exits)
+export const INKY_RELEASE_DOTS = 30;
+export const CLYDE_RELEASE_DOTS = 60;
+
+// Frightened mode duration (seconds)
+export const FRIGHTENED_DURATION = 6.0;
+export const FRIGHTENED_FLASH_START = 2.0; // start flashing this many seconds before end
+
+// Ghost eating combo scores
+export const GHOST_EAT_SCORES: ReadonlyArray<number> = [200, 400, 800, 1600];
+
+// Ghost speeds (tiles/sec)
+export const GHOST_SPEED_NORMAL_L1 = 7.5;
+export const GHOST_SPEED_NORMAL_L2 = 8.5;
+export const GHOST_SPEED_FRIGHTENED = 4.0;
+export const GHOST_SPEED_EATEN = 16.0;
+export const TUNNEL_SPEED_FACTOR = 0.6; // 40% reduction
+
+// Scatter corner tiles per ghost (col, row)
+export const SCATTER_TARGETS = {
+  blinky: { col: 25, row: 0 },
+  pinky:  { col: 2,  row: 0 },
+  inky:   { col: 27, row: 30 },
+  clyde:  { col: 0,  row: 30 },
+} as const;
+
+// Clyde distance threshold for targeting behavior (tiles)
+export const CLYDE_CHASE_DISTANCE = 8;
+
+// Score popup display duration (seconds)
+export const SCORE_POPUP_TTL = 1.0;

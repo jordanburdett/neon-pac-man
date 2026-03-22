@@ -352,7 +352,9 @@ export class GameEngine {
       for (const [ghost, countdown] of [...this.frightenedCountdowns.entries()]) {
         const newCountdown = countdown - dt;
         if (newCountdown <= 0) {
-          ghost.onFrightened();
+          if (this.frightenedTimer > 0) {
+            ghost.onFrightened();
+          }
           this.frightenedCountdowns.delete(ghost);
         } else {
           this.frightenedCountdowns.set(ghost, newCountdown);
@@ -362,7 +364,7 @@ export class GameEngine {
 
     // Shockwave animation
     if (this.shockwave) {
-      this.shockwave.radius += 200 * dt;
+      this.shockwave.radius += SHOCKWAVE_SPEED * dt;
       const maxRadius = Math.sqrt(CANVAS_WIDTH * CANVAS_WIDTH + CANVAS_HEIGHT * CANVAS_HEIGHT);
       if (this.shockwave.radius > maxRadius) this.shockwave = null;
     }
@@ -420,6 +422,8 @@ export class GameEngine {
     this.state = GameState.PLAYING;
     this.resetModeTimer();
     this.frightenedTimer = 0;
+    this.frightenedCountdowns.clear();
+    this.shockwave = null;
     this.ghostEatCombo = 0;
     this.scorePopups = [];
     this.respawnPacMan();
@@ -506,7 +510,8 @@ export class GameEngine {
         const dx = g.pixelPos.x - this.pacPos.x;
         const dy = g.pixelPos.y - this.pacPos.y;
         const dist = Math.sqrt(dx * dx + dy * dy);
-        const delay = dist / SHOCKWAVE_SPEED;
+        const maxDelay = this.currentFrightenedDuration - 0.05; // 50ms buffer
+        const delay = Math.min(dist / SHOCKWAVE_SPEED, maxDelay);
         if (delay <= 0.05) {
           g.onFrightened(); // essentially instant
         } else {

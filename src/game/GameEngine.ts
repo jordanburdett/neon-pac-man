@@ -19,18 +19,68 @@ import {
   SCORE_POPUP_TTL,
   INKY_RELEASE_DOTS,
   CLYDE_RELEASE_DOTS,
+  LEVEL_FRIGHTENED_DECREASE,
+  LEVEL_FRIGHTENED_FLOOR,
+  LEVEL_PACMAN_SPEED_INCREASE,
+  LEVEL_PACMAN_SPEED_CAP,
+  HIGH_SCORE_KEY,
+  LEVEL_FLASH_DURATION,
+  LEVEL_FLASH_INTERVAL,
 } from './constants';
 import { MAZE_LAYOUT, isTileWalkable, tileCenterPx, pixelToTile, countPellets } from './mazeData';
 import { Direction, GameState, GhostMode, GhostId } from './types';
 import type { Vec2, ScorePopup } from './types';
 import { Ghost } from './Ghost';
 
+// ─── High-score localStorage helpers ────────────────────────────────────────
+
+export function readHighScore(): number {
+  try {
+    return parseInt(localStorage.getItem(HIGH_SCORE_KEY) ?? '0', 10) || 0;
+  } catch {
+    return 0;
+  }
+}
+
+export function writeHighScore(score: number): void {
+  try {
+    localStorage.setItem(HIGH_SCORE_KEY, String(score));
+  } catch {
+    // ignore storage errors
+  }
+}
+
+export function maybeUpdateHighScore(score: number): number {
+  const current = readHighScore();
+  if (score > current) {
+    writeHighScore(score);
+    return score;
+  }
+  return current;
+}
+
+// ─── Level progression helpers ───────────────────────────────────────────────
+
+export function levelFrightenedDuration(level: number): number {
+  const reduced = FRIGHTENED_DURATION - (level - 1) * LEVEL_FRIGHTENED_DECREASE;
+  return Math.max(reduced, LEVEL_FRIGHTENED_FLOOR);
+}
+
+export function levelPacmanSpeed(level: number): number {
+  const speed = PACMAN_SPEED / TILE_SIZE + (level - 1) * LEVEL_PACMAN_SPEED_INCREASE;
+  return Math.min(speed, LEVEL_PACMAN_SPEED_CAP) * TILE_SIZE;
+}
+
 export class GameEngine {
   private ctx: CanvasRenderingContext2D;
 
+  // Global elapsed time (seconds) for animations
+  private globalTime = 0;
+
   // Game state
-  private state: GameState = GameState.PLAYING;
+  private state: GameState = GameState.TITLE;
   private score = 0;
+  private highScore = 0;
   private lives = INITIAL_LIVES;
   private level = 1;
 
@@ -59,6 +109,7 @@ export class GameEngine {
 
   // Frightened mode
   private frightenedTimer = 0;
+  private currentFrightenedDuration: number;
 
   // Ghost eating combo (resets each power pellet)
   private ghostEatCombo = 0;
@@ -70,9 +121,11 @@ export class GameEngine {
   private dyingTimer = 0;
   private readonly DYING_DURATION = 1.5;
 
-  // Level complete timer
+  // Level complete flash
   private levelCompleteTimer = 0;
-  private readonly LEVEL_COMPLETE_DURATION = 2.0;
+  private readonly LEVEL_COMPLETE_DURATION = LEVEL_FLASH_DURATION;
+  private flashState = false;
+  private flashAccum = 0;
 
   // RAF handle
   private rafHandle = 0;
@@ -81,8 +134,18 @@ export class GameEngine {
   // Keyboard listener ref
   private onKeyDown: (e: KeyboardEvent) => void;
 
+  // External direction input (from D-pad)
+  setNextDirection(dir: Direction): void {
+    this.pacNextDir = dir;
+    if (this.state === GameState.GAME_OVER || this.state === GameState.TITLE) {
+      this.startGame();
+    }
+  }
+
   constructor(ctx: CanvasRenderingContext2D) {
     this.ctx = ctx;
+    this.highScore = readHighScore();
+    this.currentFrightenedDuration = FRIGHTENED_DURATION;
 
     // Deep-copy the maze so we can mutate pellet tiles
     this.grid = MAZE_LAYOUT.map(row => [...row]);
@@ -95,13 +158,9 @@ export class GameEngine {
     this.pacPos = { x: start.x, y: start.y };
 
     // Initialise ghosts
-    // Blinky: starts outside ghost house, immediately released
     this.blinky = new Ghost(GhostId.BLINKY, '#FF0000', 14, 11, true);
-    // Pinky: inside house but exits immediately — triggered on first frame
     this.pinky  = new Ghost(GhostId.PINKY,  '#FF69B4', 13, 14, false);
-    // Inky: inside house, exits after 30 pellets
     this.inky   = new Ghost(GhostId.INKY,   '#00FFFF', 11, 14, false);
-    // Clyde: inside house, exits after 60 pellets
     this.clyde  = new Ghost(GhostId.CLYDE,  '#FFA500', 16, 14, false);
 
     this.ghosts = [this.blinky, this.pinky, this.inky, this.clyde];
@@ -137,15 +196,15 @@ export class GameEngine {
       this.pacNextDir = dir;
     }
 
-    // Restart on Game Over; advance level on Level Complete (preserve score)
-    if (this.state === GameState.GAME_OVER) {
-      this.restart();
+    // On title/game over: any key starts/restarts
+    if (this.state === GameState.TITLE || this.state === GameState.GAME_OVER) {
+      this.startGame();
     } else if (this.state === GameState.LEVEL_COMPLETE) {
       this.advanceLevel();
     }
   }
 
-  private restart(): void {
+  private startGame(): void {
     this.grid = MAZE_LAYOUT.map(row => [...row]);
     const { pellets, powerPellets } = countPellets(this.grid);
     this.totalPellets = pellets + powerPellets;
@@ -153,6 +212,7 @@ export class GameEngine {
     this.score = 0;
     this.lives = INITIAL_LIVES;
     this.level = 1;
+    this.currentFrightenedDuration = FRIGHTENED_DURATION;
     this.state = GameState.PLAYING;
     this.resetModeTimer();
     this.frightenedTimer = 0;
@@ -194,6 +254,8 @@ export class GameEngine {
       const dt = Math.min(rawDt, MAX_DT);
       this.lastTimestamp = timestamp;
 
+      this.globalTime += dt;
+
       this.update(dt);
       this.render();
 
@@ -203,6 +265,8 @@ export class GameEngine {
   }
 
   private update(dt: number): void {
+    if (this.state === GameState.TITLE) return;
+
     if (this.state === GameState.DYING) {
       this.dyingTimer -= dt;
       if (this.dyingTimer <= 0) {
@@ -213,6 +277,7 @@ export class GameEngine {
           this.ghostEatCombo = 0;
           this.state = GameState.PLAYING;
         } else {
+          this.highScore = maybeUpdateHighScore(this.score);
           this.state = GameState.GAME_OVER;
         }
       }
@@ -221,6 +286,12 @@ export class GameEngine {
 
     if (this.state === GameState.LEVEL_COMPLETE) {
       this.levelCompleteTimer -= dt;
+      // Wall flash toggle
+      this.flashAccum += dt;
+      if (this.flashAccum >= LEVEL_FLASH_INTERVAL) {
+        this.flashAccum -= LEVEL_FLASH_INTERVAL;
+        this.flashState = !this.flashState;
+      }
       if (this.levelCompleteTimer <= 0) {
         this.advanceLevel();
       }
@@ -251,10 +322,10 @@ export class GameEngine {
     }
 
     // Ghost release based on pellets eaten
-    if (!this.inky.isReleased && !this.inky['isExiting'] && this.pelletsEaten >= INKY_RELEASE_DOTS) {
+    if (!this.inky.isReleased && !this.inky.isExiting && this.pelletsEaten >= INKY_RELEASE_DOTS) {
       this.inky.startExiting(this.grid);
     }
-    if (!this.clyde.isReleased && !this.clyde['isExiting'] && this.pelletsEaten >= CLYDE_RELEASE_DOTS) {
+    if (!this.clyde.isReleased && !this.clyde.isExiting && this.pelletsEaten >= CLYDE_RELEASE_DOTS) {
       this.clyde.startExiting(this.grid);
     }
 
@@ -291,10 +362,15 @@ export class GameEngine {
 
   private advanceLevel(): void {
     this.level++;
+    // Apply level progression
+    this.currentFrightenedDuration = levelFrightenedDuration(this.level);
+    // Apply ghost speed increase via their level property
     this.grid = MAZE_LAYOUT.map(row => [...row]);
     const { pellets, powerPellets } = countPellets(this.grid);
     this.totalPellets = pellets + powerPellets;
     this.pelletsEaten = 0;
+    this.flashState = false;
+    this.flashAccum = 0;
     this.state = GameState.PLAYING;
     this.resetModeTimer();
     this.frightenedTimer = 0;
@@ -305,7 +381,7 @@ export class GameEngine {
   }
 
   private movePacMan(dt: number): void {
-    const speed = PACMAN_SPEED;
+    const speed = levelPacmanSpeed(this.level);
 
     // Try switching to next direction if grid-aligned
     const aligned =
@@ -364,16 +440,20 @@ export class GameEngine {
       gridRow[col] = 0;
       this.score += PELLET_SCORE;
       this.pelletsEaten++;
+      this.highScore = maybeUpdateHighScore(this.score);
       if (this.pelletsEaten >= this.totalPellets) {
         this.state = GameState.LEVEL_COMPLETE;
         this.levelCompleteTimer = this.LEVEL_COMPLETE_DURATION;
+        this.flashState = false;
+        this.flashAccum = 0;
       }
     } else if (tile === 3) {
       gridRow[col] = 0;
       this.score += POWER_PELLET_SCORE;
       this.pelletsEaten++;
+      this.highScore = maybeUpdateHighScore(this.score);
       // Trigger frightened mode
-      this.frightenedTimer = FRIGHTENED_DURATION;
+      this.frightenedTimer = this.currentFrightenedDuration;
       this.ghostEatCombo = 0;
       for (const g of this.ghosts) {
         g.onFrightened();
@@ -381,6 +461,8 @@ export class GameEngine {
       if (this.pelletsEaten >= this.totalPellets) {
         this.state = GameState.LEVEL_COMPLETE;
         this.levelCompleteTimer = this.LEVEL_COMPLETE_DURATION;
+        this.flashState = false;
+        this.flashAccum = 0;
       }
     }
   }
@@ -397,6 +479,7 @@ export class GameEngine {
         // Eat the ghost
         const pts = GHOST_EAT_SCORES[Math.min(this.ghostEatCombo, GHOST_EAT_SCORES.length - 1)] ?? 1600;
         this.score += pts;
+        this.highScore = maybeUpdateHighScore(this.score);
         this.ghostEatCombo++;
         ghost.onEaten(this.grid);
         // Score popup at ghost position
@@ -421,11 +504,17 @@ export class GameEngine {
 
   private render(): void {
     const ctx = this.ctx;
-    ctx.fillStyle = '#000';
+    ctx.fillStyle = '#000000';
     ctx.fillRect(0, 0, CANVAS_WIDTH, CANVAS_HEIGHT);
+
+    if (this.state === GameState.TITLE) {
+      this.renderTitleScreen();
+      return;
+    }
 
     this.renderMaze();
     this.renderPellets();
+    this.renderGhostTrails();
     this.renderGhosts();
     this.renderPacMan();
     this.renderScorePopups();
@@ -442,20 +531,34 @@ export class GameEngine {
 
   private renderMaze(): void {
     const ctx = this.ctx;
-    ctx.fillStyle = '#1a1aff';
+
+    // For level-complete flash: alternate wall color between blue and white
+    const isFlashing = this.state === GameState.LEVEL_COMPLETE;
+    const wallColor = isFlashing && this.flashState ? '#ffffff' : '#00BFFF';
+
+    ctx.save();
+    ctx.shadowColor = wallColor;
+    ctx.shadowBlur = 8;
+    ctx.strokeStyle = wallColor;
+    ctx.lineWidth = 1;
+
     for (let r = 0; r < ROWS; r++) {
       const row = this.grid[r];
       if (!row) continue;
       for (let c = 0; c < COLS; c++) {
         if (row[c] === 1) {
+          ctx.fillStyle = wallColor;
           ctx.fillRect(c * TILE_SIZE, r * TILE_SIZE, TILE_SIZE, TILE_SIZE);
         }
       }
     }
+
+    ctx.restore();
   }
 
   private renderPellets(): void {
     const ctx = this.ctx;
+
     for (let r = 0; r < ROWS; r++) {
       const row = this.grid[r];
       if (!row) continue;
@@ -463,61 +566,175 @@ export class GameEngine {
         const cx = c * TILE_SIZE + TILE_SIZE / 2;
         const cy = r * TILE_SIZE + TILE_SIZE / 2;
         if (row[c] === 2) {
+          ctx.save();
           ctx.fillStyle = '#FFD700';
+          ctx.shadowColor = '#FFD700';
+          ctx.shadowBlur = 4;
           ctx.beginPath();
-          ctx.arc(cx, cy, 2, 0, Math.PI * 2);
+          ctx.arc(cx, cy, 3, 0, Math.PI * 2);
           ctx.fill();
+          ctx.restore();
         } else if (row[c] === 3) {
+          // Pulsing power pellet
+          const pulse = 8 + 12 * Math.abs(Math.sin(this.globalTime * 2));
+          ctx.save();
           ctx.fillStyle = '#FF00FF';
+          ctx.shadowColor = '#FF00FF';
+          ctx.shadowBlur = pulse;
           ctx.beginPath();
-          ctx.arc(cx, cy, 5, 0, Math.PI * 2);
+          ctx.arc(cx, cy, 7, 0, Math.PI * 2);
           ctx.fill();
+          ctx.restore();
         }
+      }
+    }
+  }
+
+  private renderGhostTrails(): void {
+    const ctx = this.ctx;
+
+    for (const ghost of this.ghosts) {
+      if (ghost.trailPositions.length === 0) continue;
+      for (let i = 0; i < ghost.trailPositions.length; i++) {
+        const trail = ghost.trailPositions[i];
+        if (!trail) continue;
+        // Oldest trail at index 0 is most faded
+        const alpha = 0.5 - i * 0.08;
+        ctx.save();
+        ctx.globalAlpha = Math.max(0, alpha);
+        ctx.fillStyle = ghost.color;
+        ctx.beginPath();
+        ctx.arc(trail.x, trail.y, 4, 0, Math.PI * 2);
+        ctx.fill();
+        ctx.restore();
       }
     }
   }
 
   private renderGhosts(): void {
-    const ctx = this.ctx;
     const radius = TILE_SIZE * 0.45;
 
     for (const ghost of this.ghosts) {
-      let color = ghost.color;
-
-      if (ghost.mode === GhostMode.FRIGHTENED) {
-        // Flash between blue and white in the last 2 seconds
-        if (this.frightenedTimer < FRIGHTENED_FLASH_START) {
-          const flash = Math.floor(this.frightenedTimer / 0.25) % 2 === 0;
-          color = flash ? '#1a1aff' : '#ffffff';
-        } else {
-          color = '#1a1aff';
-        }
-      } else if (ghost.mode === GhostMode.EATEN) {
-        // Render as two eyes only
-        this.renderGhostEyes(ghost.pixelPos.x, ghost.pixelPos.y);
+      if (ghost.mode === GhostMode.EATEN) {
+        this.renderGhostEyes(ghost.pixelPos.x, ghost.pixelPos.y, ghost.direction);
         continue;
       }
 
-      ctx.fillStyle = color;
-      ctx.beginPath();
-      ctx.arc(ghost.pixelPos.x, ghost.pixelPos.y, radius, 0, Math.PI * 2);
-      ctx.fill();
+      let bodyColor = ghost.color;
+      let frightened = false;
+
+      if (ghost.mode === GhostMode.FRIGHTENED) {
+        frightened = true;
+        // Flash between blue and white in the last 2 seconds
+        if (this.frightenedTimer < FRIGHTENED_FLASH_START) {
+          const flash = Math.floor(this.frightenedTimer / 0.25) % 2 === 0;
+          bodyColor = flash ? '#1A1AFF' : '#ffffff';
+        } else {
+          bodyColor = '#1A1AFF';
+        }
+      }
+
+      this.renderGhostBody(ghost.pixelPos.x, ghost.pixelPos.y, radius, bodyColor, ghost.direction, frightened);
     }
   }
 
-  private renderGhostEyes(x: number, y: number): void {
+  private renderGhostBody(
+    x: number,
+    y: number,
+    radius: number,
+    color: string,
+    direction: Direction,
+    frightened: boolean,
+  ): void {
+    const ctx = this.ctx;
+
+    ctx.save();
+    ctx.fillStyle = color;
+    ctx.shadowColor = color;
+    ctx.shadowBlur = 6;
+
+    // Ghost body: semicircle top + rectangular sides + 3 scalloped bumps at bottom
+    const top = y - radius;
+    const bottom = y + radius;
+    const left = x - radius;
+    const right = x + radius;
+
+    ctx.beginPath();
+    // Semicircle top
+    ctx.arc(x, y, radius, Math.PI, 0, false);
+    // Right side down
+    ctx.lineTo(right, bottom);
+    // 3 scalloped bumps at bottom (right to left)
+    const bumpR = radius / 3;
+    ctx.arc(x + bumpR, bottom, bumpR, 0, Math.PI, true);
+    ctx.arc(x, bottom, bumpR, 0, Math.PI, true);
+    ctx.arc(x - bumpR, bottom, bumpR, 0, Math.PI, true);
+    // Left side back up
+    ctx.lineTo(left, top + radius); // back to semicircle start
+    ctx.closePath();
+    ctx.fill();
+    ctx.restore();
+
+    // Eyes (only when not frightened)
+    if (!frightened) {
+      this.renderGhostEyes(x, y, direction);
+    } else {
+      // Frightened: draw simple wavy mouth
+      ctx.save();
+      ctx.strokeStyle = '#ffffff';
+      ctx.lineWidth = 1.5;
+      ctx.beginPath();
+      const mouthY = y + radius * 0.3;
+      const mouthLeft = x - radius * 0.5;
+      const mouthRight = x + radius * 0.5;
+      const waveH = radius * 0.2;
+      ctx.moveTo(mouthLeft, mouthY);
+      ctx.quadraticCurveTo(mouthLeft + radius * 0.25, mouthY - waveH, x, mouthY);
+      ctx.quadraticCurveTo(x + radius * 0.25, mouthY + waveH, mouthRight, mouthY);
+      ctx.stroke();
+      ctx.restore();
+    }
+  }
+
+  private renderGhostEyes(x: number, y: number, direction: Direction): void {
     const ctx = this.ctx;
     const eyeRadius = TILE_SIZE * 0.15;
+    const pupilRadius = TILE_SIZE * 0.08;
     const eyeOffsetX = TILE_SIZE * 0.15;
     const eyeOffsetY = TILE_SIZE * 0.1;
 
+    // Pupil offset based on direction
+    const dirOffsets: Record<Direction, { px: number; py: number }> = {
+      LEFT:  { px: -2, py: 0 },
+      RIGHT: { px: 2,  py: 0 },
+      UP:    { px: 0,  py: -2 },
+      DOWN:  { px: 0,  py: 2 },
+      NONE:  { px: 0,  py: 0 },
+    };
+    const { px, py } = dirOffsets[direction];
+
+    // Left eye white
+    ctx.save();
     ctx.fillStyle = '#ffffff';
     ctx.beginPath();
     ctx.arc(x - eyeOffsetX, y - eyeOffsetY, eyeRadius, 0, Math.PI * 2);
     ctx.fill();
+    // Right eye white
     ctx.beginPath();
     ctx.arc(x + eyeOffsetX, y - eyeOffsetY, eyeRadius, 0, Math.PI * 2);
     ctx.fill();
+    ctx.restore();
+
+    // Pupils (colored)
+    ctx.save();
+    ctx.fillStyle = '#4444ff';
+    ctx.beginPath();
+    ctx.arc(x - eyeOffsetX + px, y - eyeOffsetY + py, pupilRadius, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.beginPath();
+    ctx.arc(x + eyeOffsetX + px, y - eyeOffsetY + py, pupilRadius, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.restore();
   }
 
   private renderPacMan(): void {
@@ -526,7 +743,9 @@ export class GameEngine {
     }
     const ctx = this.ctx;
     const radius = TILE_SIZE * 0.45;
-    const mouthAngle = 0.25 * Math.PI;
+
+    // Animated mouth: opens/closes based on globalTime
+    const mouth = Math.abs(Math.sin(this.globalTime * 8)) * 0.35;
 
     const rotations: Record<Direction, number> = {
       RIGHT: 0,
@@ -537,18 +756,22 @@ export class GameEngine {
     };
     const rotation = rotations[this.pacDir];
 
+    ctx.save();
     ctx.fillStyle = '#FFE000';
+    ctx.shadowColor = '#FFE000';
+    ctx.shadowBlur = 10;
     ctx.beginPath();
     ctx.moveTo(this.pacPos.x, this.pacPos.y);
     ctx.arc(
       this.pacPos.x,
       this.pacPos.y,
       radius,
-      rotation + mouthAngle,
-      rotation + Math.PI * 2 - mouthAngle
+      rotation + (0.35 + mouth),
+      rotation + Math.PI * 2 - (0.35 + mouth),
     );
     ctx.closePath();
     ctx.fill();
+    ctx.restore();
   }
 
   private renderScorePopups(): void {
@@ -567,21 +790,39 @@ export class GameEngine {
 
   private renderHUD(): void {
     const ctx = this.ctx;
+
+    // Score top-left
     ctx.fillStyle = '#FFE000';
     ctx.font = '14px monospace';
-    ctx.fillText(`SCORE: ${this.score}`, 8, CANVAS_HEIGHT - 8);
-    ctx.fillText(`LEVEL: ${this.level}`, CANVAS_WIDTH / 2 - 30, CANVAS_HEIGHT - 8);
+    ctx.textAlign = 'left';
+    ctx.fillText(`SCORE: ${this.score}`, 8, 16);
 
-    // Lives as small Pac-Man arcs
-    ctx.fillStyle = '#FFE000';
+    // High score top-center
+    ctx.textAlign = 'center';
+    ctx.fillStyle = '#ffffff';
+    ctx.fillText(`HI: ${this.highScore}`, CANVAS_WIDTH / 2, 16);
+
+    // Level top-right
+    ctx.textAlign = 'right';
+    ctx.fillStyle = '#00BFFF';
+    ctx.fillText(`LVL: ${this.level}`, CANVAS_WIDTH - 8, 16);
+
+    ctx.textAlign = 'left';
+
+    // Lives: small Pac-Man arc icons bottom-left (radius 7px)
     for (let i = 0; i < this.lives; i++) {
-      const lx = CANVAS_WIDTH - 20 - i * 18;
-      const ly = CANVAS_HEIGHT - 10;
+      const lx = 16 + i * 20;
+      const ly = CANVAS_HEIGHT - 12;
+      ctx.save();
+      ctx.fillStyle = '#FFE000';
+      ctx.shadowColor = '#FFE000';
+      ctx.shadowBlur = 6;
       ctx.beginPath();
-      ctx.arc(lx, ly, 6, 0.2 * Math.PI, 1.8 * Math.PI);
       ctx.moveTo(lx, ly);
+      ctx.arc(lx, ly, 7, 0.3 * Math.PI, 1.7 * Math.PI);
       ctx.closePath();
       ctx.fill();
+      ctx.restore();
     }
   }
 
@@ -591,43 +832,100 @@ export class GameEngine {
     ctx.fillRect(0, 0, CANVAS_WIDTH, CANVAS_HEIGHT);
   }
 
+  private renderTitleScreen(): void {
+    const ctx = this.ctx;
+
+    // Dimly lit maze in background at 20% opacity
+    ctx.save();
+    ctx.globalAlpha = 0.2;
+    this.renderMaze();
+    ctx.restore();
+
+    // Title
+    ctx.save();
+    ctx.fillStyle = '#FFE000';
+    ctx.shadowColor = '#FFE000';
+    ctx.shadowBlur = 20;
+    ctx.font = 'bold 36px Orbitron, monospace';
+    ctx.textAlign = 'center';
+    ctx.fillText('NEON PAC-MAN', CANVAS_WIDTH / 2, CANVAS_HEIGHT / 2 - 40);
+    ctx.restore();
+
+    // Subtitle
+    ctx.save();
+    ctx.fillStyle = '#00BFFF';
+    ctx.shadowColor = '#00BFFF';
+    ctx.shadowBlur = 10;
+    ctx.font = '14px monospace';
+    ctx.textAlign = 'center';
+    ctx.fillText('PRESS ANY KEY OR TAP TO START', CANVAS_WIDTH / 2, CANVAS_HEIGHT / 2 + 20);
+    ctx.restore();
+
+    // High score
+    ctx.fillStyle = '#ffffff';
+    ctx.font = '13px monospace';
+    ctx.textAlign = 'center';
+    if (this.highScore > 0) {
+      ctx.fillText(`BEST: ${this.highScore}`, CANVAS_WIDTH / 2, CANVAS_HEIGHT / 2 + 50);
+    }
+    ctx.textAlign = 'left';
+  }
+
   private renderGameOver(): void {
     const ctx = this.ctx;
-    ctx.fillStyle = 'rgba(0,0,0,0.75)';
+
+    // Semi-transparent dark overlay
+    ctx.fillStyle = 'rgba(0,0,0,0.8)';
     ctx.fillRect(0, 0, CANVAS_WIDTH, CANVAS_HEIGHT);
 
+    // GAME OVER text
+    ctx.save();
     ctx.fillStyle = '#FF0000';
-    ctx.font = 'bold 36px monospace';
+    ctx.shadowColor = '#FF0000';
+    ctx.shadowBlur = 20;
+    ctx.font = 'bold 36px Orbitron, monospace';
     ctx.textAlign = 'center';
-    ctx.fillText('GAME OVER', CANVAS_WIDTH / 2, CANVAS_HEIGHT / 2 - 20);
+    ctx.fillText('GAME OVER', CANVAS_WIDTH / 2, CANVAS_HEIGHT / 2 - 40);
+    ctx.restore();
 
+    // Score
     ctx.fillStyle = '#FFE000';
     ctx.font = '18px monospace';
-    ctx.fillText(`SCORE: ${this.score}`, CANVAS_WIDTH / 2, CANVAS_HEIGHT / 2 + 20);
+    ctx.textAlign = 'center';
+    ctx.fillText(`SCORE: ${this.score}`, CANVAS_WIDTH / 2, CANVAS_HEIGHT / 2 + 5);
 
-    ctx.fillStyle = '#fff';
+    // High score
+    ctx.fillStyle = '#ffffff';
+    ctx.font = '16px monospace';
+    ctx.fillText(`BEST: ${this.highScore}`, CANVAS_WIDTH / 2, CANVAS_HEIGHT / 2 + 30);
+
+    ctx.fillStyle = '#00BFFF';
     ctx.font = '13px monospace';
-    ctx.fillText('PRESS ANY KEY TO RESTART', CANVAS_WIDTH / 2, CANVAS_HEIGHT / 2 + 55);
+    ctx.fillText('TAP OR PRESS ANY KEY TO RESTART', CANVAS_WIDTH / 2, CANVAS_HEIGHT / 2 + 60);
     ctx.textAlign = 'left';
   }
 
   private renderLevelComplete(): void {
     const ctx = this.ctx;
-    ctx.fillStyle = 'rgba(0,0,0,0.75)';
+
+    // The maze flash is handled in renderMaze() via flashState
+    // Just show a brief overlay message
+    ctx.fillStyle = 'rgba(0,0,0,0.5)';
     ctx.fillRect(0, 0, CANVAS_WIDTH, CANVAS_HEIGHT);
 
-    ctx.fillStyle = '#00FF00';
-    ctx.font = 'bold 28px monospace';
+    ctx.save();
+    ctx.fillStyle = this.flashState ? '#ffffff' : '#00FF00';
+    ctx.shadowColor = ctx.fillStyle;
+    ctx.shadowBlur = 20;
+    ctx.font = 'bold 28px Orbitron, monospace';
     ctx.textAlign = 'center';
     ctx.fillText('LEVEL COMPLETE!', CANVAS_WIDTH / 2, CANVAS_HEIGHT / 2 - 20);
+    ctx.restore();
 
     ctx.fillStyle = '#FFE000';
     ctx.font = '18px monospace';
+    ctx.textAlign = 'center';
     ctx.fillText(`SCORE: ${this.score}`, CANVAS_WIDTH / 2, CANVAS_HEIGHT / 2 + 20);
-
-    ctx.fillStyle = '#fff';
-    ctx.font = '13px monospace';
-    ctx.fillText('PRESS ANY KEY FOR NEXT LEVEL', CANVAS_WIDTH / 2, CANVAS_HEIGHT / 2 + 55);
     ctx.textAlign = 'left';
   }
 
@@ -640,6 +938,9 @@ export class GameEngine {
   getGlobalMode(): GhostMode { return this.globalMode; }
   getFrightenedTimer(): number { return this.frightenedTimer; }
   getModeCycleIndex(): number { return this.modeCycleIndex; }
+  getLevel(): number { return this.level; }
+  getHighScore(): number { return this.highScore; }
+  getGlobalTime(): number { return this.globalTime; }
 }
 
 // Helper: direction to column/row deltas

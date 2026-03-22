@@ -82,6 +82,9 @@ export class Ghost {
   // Current level (affects speed)
   level = 1;
 
+  // Trail positions (last 6 pixel positions) for neon trail rendering
+  trailPositions: { x: number; y: number }[] = [];
+
   // Path to follow when exiting ghost house, or when EATEN returning home.
   // Each Direction step is consumed as the ghost crosses tile boundaries.
   private activePath: Direction[] = [];
@@ -91,7 +94,7 @@ export class Ghost {
   private pathStepIndex = 0;
 
   // Whether the ghost is in the process of exiting the ghost house
-  private isExiting = false;
+  private _isExiting = false;
 
   constructor(
     id: GhostId,
@@ -118,6 +121,11 @@ export class Ghost {
     return pixelToTile(this.pixelPos.x, this.pixelPos.y);
   }
 
+  /** Public getter so GameEngine doesn't need bracket notation. */
+  get isExiting(): boolean {
+    return this._isExiting;
+  }
+
   // ─── lifecycle callbacks (called by GameEngine) ──────────────────────────
 
   /** Reset to starting position for new life / level. */
@@ -128,10 +136,11 @@ export class Ghost {
     this.mode = GhostMode.SCATTER;
     this.direction = isReleased ? Direction.LEFT : Direction.UP;
     this.isReleased = isReleased;
-    this.isExiting = false;
+    this._isExiting = false;
     this.activePath = [];
     this.pathStepIndex = 0;
     this.pathStepOrigin = null;
+    this.trailPositions = [];
     // Suppress unused parameter warning — grid is used by subclasses / tests
     void grid;
   }
@@ -177,8 +186,8 @@ export class Ghost {
    * Called by GameEngine when this ghost should start exiting the ghost house.
    */
   startExiting(grid: number[][]): void {
-    if (this.isExiting || this.isReleased) return;
-    this.isExiting = true;
+    if (this._isExiting || this.isReleased) return;
+    this._isExiting = true;
     const target = { col: GHOST_HOUSE_ENTRY_COL, row: GHOST_HOUSE_ENTRY_ROW };
     this.activePath = bfsPath(grid, this.tilePos, target);
     this.pathStepIndex = 0;
@@ -204,12 +213,18 @@ export class Ghost {
     pacDir: Direction,
     blinkyTile: TilePos,
   ): void {
-    if (!this.isReleased && !this.isExiting) return;
+    if (!this.isReleased && !this._isExiting) return;
+
+    // Record position for trail before moving
+    this.trailPositions.push({ x: this.pixelPos.x, y: this.pixelPos.y });
+    if (this.trailPositions.length > 6) {
+      this.trailPositions.shift();
+    }
 
     const speed = this.currentSpeed(grid); // tiles/sec
     const distPx = speed * TILE_SIZE * dt;
 
-    if (this.isExiting || this.mode === GhostMode.EATEN) {
+    if (this._isExiting || this.mode === GhostMode.EATEN) {
       this.moveAlongPath(distPx, grid);
       return;
     }
@@ -231,7 +246,7 @@ export class Ghost {
         // Path exhausted
         if (this.mode === GhostMode.EATEN) {
           this.onEatenArrived();
-        } else if (this.isExiting) {
+        } else if (this._isExiting) {
           this.finishExiting();
         }
         return;
@@ -277,9 +292,6 @@ export class Ghost {
   }
 
   private onEatenArrived(): void {
-    // Snap to ghost house entry tile
-    const entryCtr = tileCenterPx(GHOST_HOUSE_ENTRY_COL, GHOST_HOUSE_ENTRY_ROW);
-    this.pixelPos = { x: entryCtr.x, y: entryCtr.y };
     // Teleport back to start tile and respawn
     const startCtr = tileCenterPx(this.startTile.col, this.startTile.row);
     this.pixelPos = { x: startCtr.x, y: startCtr.y };
@@ -296,7 +308,7 @@ export class Ghost {
     const center = tileCenterPx(GHOST_HOUSE_ENTRY_COL, GHOST_HOUSE_ENTRY_ROW);
     this.pixelPos = { x: center.x, y: center.y };
     this.lastDecisionTile = { col: GHOST_HOUSE_ENTRY_COL, row: GHOST_HOUSE_ENTRY_ROW };
-    this.isExiting = false;
+    this._isExiting = false;
     this.isReleased = true;
     this.direction = Direction.LEFT;
     this.activePath = [];
@@ -510,7 +522,7 @@ export class Ghost {
     if (tile === 1) return false;
     if (tile === 4) {
       // Allow ghost house interior when exiting, EATEN, or not yet released
-      return this.mode === GhostMode.EATEN || this.isExiting || !this.isReleased;
+      return this.mode === GhostMode.EATEN || this._isExiting || !this.isReleased;
     }
     return true;
   }

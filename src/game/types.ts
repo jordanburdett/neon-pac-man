@@ -12,6 +12,7 @@ export const Direction = {
 export type Direction = typeof Direction[keyof typeof Direction];
 
 export const GameState = {
+  TITLE: 'TITLE',
   PLAYING: 'PLAYING',
   GAME_OVER: 'GAME_OVER',
   LEVEL_COMPLETE: 'LEVEL_COMPLETE',

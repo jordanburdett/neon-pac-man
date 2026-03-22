@@ -76,3 +76,18 @@ export const CLYDE_CHASE_DISTANCE = 8;
 
 // Score popup display duration (seconds)
 export const SCORE_POPUP_TTL = 1.0;
+
+// Level progression (applied on each level advance)
+export const LEVEL_GHOST_SPEED_INCREASE = 0.5; // tiles/sec per level
+export const LEVEL_GHOST_SPEED_CAP = 12.0;     // max tiles/sec
+export const LEVEL_FRIGHTENED_DECREASE = 0.5;  // seconds less per level
+export const LEVEL_FRIGHTENED_FLOOR = 2.0;     // minimum frightened duration (seconds)
+export const LEVEL_PACMAN_SPEED_INCREASE = 0.2; // tiles/sec per level
+export const LEVEL_PACMAN_SPEED_CAP = 11.0;    // max tiles/sec (in tiles/sec)
+
+// LocalStorage key for high score
+export const HIGH_SCORE_KEY = 'neonPacManHighScore';
+
+// Level complete flash animation
+export const LEVEL_FLASH_DURATION = 1.0; // seconds
+export const LEVEL_FLASH_INTERVAL = 0.1; // seconds per toggle

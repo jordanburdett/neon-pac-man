@@ -191,7 +191,7 @@ function detectTouch(
 
 describe('isTouchDevice detection logic', () => {
   it('returns a boolean', async () => {
-    const { isTouchDevice } = await import('../components/DPad');
+    const { isTouchDevice } = await import('../utils/device');
     const result = isTouchDevice();
     expect(typeof result).toBe('boolean');
   });

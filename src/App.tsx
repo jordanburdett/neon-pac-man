@@ -1,7 +1,8 @@
 import { useEffect, useRef } from 'react';
 import { GameEngine } from './game/GameEngine';
 import { CANVAS_WIDTH, CANVAS_HEIGHT } from './game/constants';
-import { DPad, isTouchDevice } from './components/DPad';
+import { DPad } from './components/DPad';
+import { isTouchDevice } from './utils/device';
 import { Direction } from './game/types';
 
 function App() {

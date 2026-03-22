@@ -36,15 +36,6 @@ const emptyStyle: React.CSSProperties = {
   height: BUTTON_SIZE,
 };
 
-/**
- * Detect whether the current device is a touch/coarse-pointer device.
- * Exported for unit testing.
- */
-export function isTouchDevice(): boolean {
-  if (typeof window === 'undefined') return false;
-  return 'ontouchstart' in window || window.matchMedia('(pointer:coarse)').matches;
-}
-
 export function DPad({ onDirection }: DPadProps) {
   const handlePointerDown = (dir: Direction) => (e: React.PointerEvent) => {
     e.preventDefault();

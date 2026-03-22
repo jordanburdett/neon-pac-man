@@ -72,6 +72,15 @@ export function levelPacmanSpeed(level: number): number {
   return Math.min(speed, LEVEL_PACMAN_SPEED_CAP) * TILE_SIZE;
 }
 
+// ─── Color helpers ───────────────────────────────────────────────────────────
+
+function hexToRgba(hex: string, alpha: number): string {
+  const r = parseInt(hex.slice(1, 3), 16);
+  const g = parseInt(hex.slice(3, 5), 16);
+  const b = parseInt(hex.slice(5, 7), 16);
+  return `rgba(${r},${g},${b},${alpha})`;
+}
+
 export class GameEngine {
   private ctx: CanvasRenderingContext2D;
 
@@ -517,6 +526,9 @@ export class GameEngine {
     if (this.score >= CORRUPTION_TIERS[1]) {
       this.renderWallTendrils();
     }
+    if (this.score >= CORRUPTION_TIERS[3]) {
+      this.renderPelletHalos();
+    }
     this.renderPellets();
     this.renderGhostTrails();
     this.renderGhosts();
@@ -641,16 +653,46 @@ export class GameEngine {
         const trail = ghost.trailPositions[i];
         if (!trail) continue;
         // Oldest trail at index 0 is most faded
-        const alpha = 0.5 - i * 0.08;
+        const alpha = this.score >= CORRUPTION_TIERS[2]
+          ? 0.35 - i * 0.08
+          : 0.5 - i * 0.08;
         ctx.save();
         ctx.globalAlpha = Math.max(0, alpha);
         ctx.fillStyle = ghost.color;
         ctx.beginPath();
-        ctx.arc(trail.x, trail.y, 4, 0, Math.PI * 2);
+        if (this.score >= CORRUPTION_TIERS[2]) {
+          // Tier 2: directional ellipse bleed-smear
+          ctx.ellipse(trail.x, trail.y, 5, 3, 0, 0, Math.PI * 2);
+        } else {
+          ctx.arc(trail.x, trail.y, 4, 0, Math.PI * 2);
+        }
         ctx.fill();
         ctx.restore();
       }
     }
+  }
+
+  private renderPelletHalos(): void {
+    const ctx = this.ctx;
+    const ghostColors = ['#FF0000', '#FF69B4', '#00FFFF', '#FFA500'];
+
+    ctx.save();
+    for (let r = 0; r < ROWS; r++) {
+      const row = this.grid[r];
+      if (!row) continue;
+      for (let c = 0; c < COLS; c++) {
+        if (row[c] !== 2) continue;
+        const cx = c * TILE_SIZE + TILE_SIZE / 2;
+        const cy = r * TILE_SIZE + TILE_SIZE / 2;
+        const color = ghostColors[(r * COLS + c) % 4] as string;
+        const gradient = ctx.createRadialGradient(cx, cy, 0, cx, cy, 14);
+        gradient.addColorStop(0, hexToRgba(color, 0.18));
+        gradient.addColorStop(1, 'transparent');
+        ctx.fillStyle = gradient;
+        ctx.fillRect(cx - 14, cy - 14, 28, 28);
+      }
+    }
+    ctx.restore();
   }
 
   private renderGhosts(): void {

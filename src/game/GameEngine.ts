@@ -74,6 +74,14 @@ export function levelPacmanSpeed(level: number): number {
 
 // ─── Color helpers ───────────────────────────────────────────────────────────
 
+/**
+ * Convert a 6-character hex color string to an rgba(...) CSS string.
+ *
+ * @param hex   6-character hex with leading '#', e.g. '#FF0000'.
+ *              Does NOT support 3-character shorthand like '#FFF'.
+ *              Behavior is undefined for malformed inputs.
+ * @param alpha Opacity in [0, 1].
+ */
 function hexToRgba(hex: string, alpha: number): string {
   const r = parseInt(hex.slice(1, 3), 16);
   const g = parseInt(hex.slice(3, 5), 16);
@@ -698,8 +706,13 @@ export class GameEngine {
         ctx.fillStyle = ghost.color;
         ctx.beginPath();
         if (this.score >= CORRUPTION_TIERS[2]) {
-          // Tier 2: directional ellipse bleed-smear
-          ctx.ellipse(trail.x, trail.y, 5, 3, 0, 0, Math.PI * 2);
+          // Tier 2: directional ellipse bleed-smear — elongated along travel axis
+          const smearRotation =
+            ghost.direction === Direction.RIGHT ? 0 :
+            ghost.direction === Direction.DOWN  ? Math.PI / 2 :
+            ghost.direction === Direction.LEFT  ? Math.PI :
+            /* UP / NONE */                       -Math.PI / 2;
+          ctx.ellipse(trail.x, trail.y, 5, 3, smearRotation, 0, Math.PI * 2);
         } else {
           ctx.arc(trail.x, trail.y, 4, 0, Math.PI * 2);
         }

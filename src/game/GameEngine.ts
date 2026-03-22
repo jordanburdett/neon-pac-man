@@ -90,15 +90,17 @@ export class GameEngine {
       w: Direction.UP,
       s: Direction.DOWN,
     };
-    const dir = keyMap[e.key];
+    const dir = keyMap[e.key] ?? keyMap[e.key.toLowerCase()];
     if (dir) {
       e.preventDefault();
       this.pacNextDir = dir;
     }
 
-    // Restart on Game Over or Level Complete
-    if (this.state === GameState.GAME_OVER || this.state === GameState.LEVEL_COMPLETE) {
+    // Restart on Game Over; advance level on Level Complete (preserve score)
+    if (this.state === GameState.GAME_OVER) {
       this.restart();
+    } else if (this.state === GameState.LEVEL_COMPLETE) {
+      this.advanceLevel();
     }
   }
 
@@ -178,10 +180,11 @@ export class GameEngine {
   private movePacMan(dt: number): void {
     const speed = PACMAN_SPEED;
 
-    // Try switching to next direction if grid-aligned
+    // Try switching to next direction if grid-aligned (positions are tile centers,
+    // so measure distance from the nearest center, not from the tile edge)
     const aligned =
-      Math.abs(this.pacPos.x % TILE_SIZE) < 2 &&
-      Math.abs(this.pacPos.y % TILE_SIZE) < 2;
+      Math.abs((this.pacPos.x % TILE_SIZE) - TILE_SIZE / 2) < 2 &&
+      Math.abs((this.pacPos.y % TILE_SIZE) - TILE_SIZE / 2) < 2;
 
     if (aligned && this.pacNextDir !== Direction.NONE) {
       const { col, row } = pixelToTile(this.pacPos.x, this.pacPos.y);

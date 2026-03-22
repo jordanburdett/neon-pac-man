@@ -514,7 +514,7 @@ export class GameEngine {
 
   private render(): void {
     const ctx = this.ctx;
-    ctx.fillStyle = '#000000';
+    ctx.fillStyle = this.score >= CORRUPTION_TIERS[4] ? '#001833' : '#000000';
     ctx.fillRect(0, 0, CANVAS_WIDTH, CANVAS_HEIGHT);
 
     if (this.state === GameState.TITLE) {
@@ -548,28 +548,65 @@ export class GameEngine {
   private renderMaze(): void {
     const ctx = this.ctx;
 
+    const inverted = this.score >= CORRUPTION_TIERS[4];
+
     // For level-complete flash: alternate wall color between blue and white
     const isFlashing = this.state === GameState.LEVEL_COMPLETE;
-    const wallColor = isFlashing && this.flashState ? '#ffffff' : '#00BFFF';
 
-    ctx.save();
-    ctx.shadowColor = wallColor;
-    ctx.shadowBlur = 8;
-    ctx.strokeStyle = wallColor;
-    ctx.lineWidth = 1;
+    if (inverted) {
+      // Tier 4 inverted ghost dimension: black walls on navy sea
+      ctx.save();
+      ctx.shadowColor = '#00BFFF';
+      ctx.shadowBlur = 12;
 
-    for (let r = 0; r < ROWS; r++) {
-      const row = this.grid[r];
-      if (!row) continue;
-      for (let c = 0; c < COLS; c++) {
-        if (row[c] === 1) {
-          ctx.fillStyle = wallColor;
-          ctx.fillRect(c * TILE_SIZE, r * TILE_SIZE, TILE_SIZE, TILE_SIZE);
+      for (let r = 0; r < ROWS; r++) {
+        const row = this.grid[r];
+        if (!row) continue;
+        for (let c = 0; c < COLS; c++) {
+          if (row[c] === 1) {
+            ctx.fillStyle = '#000000';
+            ctx.fillRect(c * TILE_SIZE, r * TILE_SIZE, TILE_SIZE, TILE_SIZE);
+          }
         }
       }
-    }
 
-    ctx.restore();
+      ctx.restore();
+
+      // Second pass: explicitly fill corridor/non-wall tiles with navy
+      ctx.save();
+      for (let r = 0; r < ROWS; r++) {
+        const row = this.grid[r];
+        if (!row) continue;
+        for (let c = 0; c < COLS; c++) {
+          if (row[c] !== 1) {
+            ctx.fillStyle = '#001833';
+            ctx.fillRect(c * TILE_SIZE, r * TILE_SIZE, TILE_SIZE, TILE_SIZE);
+          }
+        }
+      }
+      ctx.restore();
+    } else {
+      const wallColor = isFlashing && this.flashState ? '#ffffff' : '#00BFFF';
+
+      ctx.save();
+      ctx.shadowColor = wallColor;
+      ctx.shadowBlur = 8;
+      ctx.strokeStyle = wallColor;
+      ctx.lineWidth = 1;
+
+      for (let r = 0; r < ROWS; r++) {
+        const row = this.grid[r];
+        if (!row) continue;
+        for (let c = 0; c < COLS; c++) {
+          if (row[c] === 1) {
+            ctx.fillStyle = wallColor;
+            ctx.fillRect(c * TILE_SIZE, r * TILE_SIZE, TILE_SIZE, TILE_SIZE);
+          }
+        }
+      }
+
+      ctx.restore();
+    }
   }
 
   private renderWallTendrils(): void {

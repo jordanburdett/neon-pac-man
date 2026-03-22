@@ -135,6 +135,9 @@ export class GameEngine {
   // Score popups
   private scorePopups: ScorePopup[] = [];
 
+  // Shockwave visual (power pellet eat)
+  private shockwave: { x: number; y: number; radius: number } | null = null;
+
   // Dying animation
   private dyingTimer = 0;
   private readonly DYING_DURATION = 1.5;
@@ -339,6 +342,13 @@ export class GameEngine {
       }
     }
 
+    // Shockwave animation
+    if (this.shockwave) {
+      this.shockwave.radius += 200 * dt;
+      const maxRadius = Math.sqrt(CANVAS_WIDTH * CANVAS_WIDTH + CANVAS_HEIGHT * CANVAS_HEIGHT);
+      if (this.shockwave.radius > maxRadius) this.shockwave = null;
+    }
+
     // Ghost release based on pellets eaten
     if (!this.inky.isReleased && !this.inky.isExiting && this.pelletsEaten >= INKY_RELEASE_DOTS) {
       this.inky.startExiting(this.grid);
@@ -476,6 +486,7 @@ export class GameEngine {
       for (const g of this.ghosts) {
         g.onFrightened();
       }
+      this.shockwave = { x: this.pacPos.x, y: this.pacPos.y, radius: 0 };
       if (this.pelletsEaten >= this.totalPellets) {
         this.state = GameState.LEVEL_COMPLETE;
         this.levelCompleteTimer = this.LEVEL_COMPLETE_DURATION;
@@ -540,6 +551,7 @@ export class GameEngine {
     this.renderPellets();
     this.renderGhostTrails();
     this.renderGhosts();
+    this.renderShockwave();
     this.renderPacMan();
     this.renderScorePopups();
     this.renderHUD();
@@ -770,6 +782,37 @@ export class GameEngine {
 
       this.renderGhostBody(ghost.pixelPos.x, ghost.pixelPos.y, radius, bodyColor, ghost.direction, frightened);
     }
+  }
+
+  private renderShockwave(): void {
+    if (!this.shockwave) return;
+    const ctx = this.ctx;
+    const maxRadius = Math.sqrt(CANVAS_WIDTH * CANVAS_WIDTH + CANVAS_HEIGHT * CANVAS_HEIGHT);
+    const alpha = 1 - this.shockwave.radius / maxRadius;
+    const { x, y, radius } = this.shockwave;
+
+    ctx.save();
+
+    // Primary expanding ring
+    ctx.beginPath();
+    ctx.arc(x, y, radius, 0, Math.PI * 2);
+    ctx.strokeStyle = `rgba(0,255,255,${alpha})`;
+    ctx.lineWidth = 3;
+    ctx.shadowColor = '#00FFFF';
+    ctx.shadowBlur = 12;
+    ctx.stroke();
+
+    // Trailing ring (thinner, offset inward)
+    if (radius > 8) {
+      ctx.beginPath();
+      ctx.arc(x, y, radius - 8, 0, Math.PI * 2);
+      ctx.strokeStyle = `rgba(0,255,255,${alpha * 0.4})`;
+      ctx.lineWidth = 1.5;
+      ctx.shadowBlur = 6;
+      ctx.stroke();
+    }
+
+    ctx.restore();
   }
 
   private renderGhostBody(

@@ -91,3 +91,6 @@ export const HIGH_SCORE_KEY = 'neonPacManHighScore';
 // Level complete flash animation
 export const LEVEL_FLASH_DURATION = 1.0; // seconds
 export const LEVEL_FLASH_INTERVAL = 0.1; // seconds per toggle
+
+// Haunting Score corruption tier thresholds (score points)
+export const CORRUPTION_TIERS = [0, 500, 1500, 3000, 6000] as const;

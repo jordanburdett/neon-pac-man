@@ -26,6 +26,7 @@ import {
   HIGH_SCORE_KEY,
   LEVEL_FLASH_DURATION,
   LEVEL_FLASH_INTERVAL,
+  CORRUPTION_TIERS,
 } from './constants';
 import { MAZE_LAYOUT, isTileWalkable, tileCenterPx, pixelToTile, countPellets } from './mazeData';
 import { Direction, GameState, GhostMode, GhostId } from './types';
@@ -513,6 +514,9 @@ export class GameEngine {
     }
 
     this.renderMaze();
+    if (this.score >= CORRUPTION_TIERS[1]) {
+      this.renderWallTendrils();
+    }
     this.renderPellets();
     this.renderGhostTrails();
     this.renderGhosts();
@@ -553,6 +557,44 @@ export class GameEngine {
       }
     }
 
+    ctx.restore();
+  }
+
+  private renderWallTendrils(): void {
+    const ctx = this.ctx;
+    ctx.save();
+    ctx.lineWidth = 1;
+    ctx.strokeStyle = 'rgba(80,120,255,0.18)';
+
+    for (let r = 0; r < ROWS; r++) {
+      const row = this.grid[r];
+      if (!row) continue;
+      for (let c = 0; c < COLS; c++) {
+        if (row[c] !== 1) continue;
+
+        // Check each diagonal neighbor; draw a tendril toward each that is also a wall
+        const diagonals: [number, number][] = [[-1, -1], [-1, 1], [1, -1], [1, 1]];
+        for (const [dr, dc] of diagonals) {
+          const nr = r + dr;
+          const nc = c + dc;
+          if (this.grid[nr]?.[nc] !== 1) continue;
+
+          // Corner pixel of this wall tile toward that diagonal
+          const px = c * TILE_SIZE + ((dc + 1) / 2) * TILE_SIZE;
+          const py = r * TILE_SIZE + ((dr + 1) / 2) * TILE_SIZE;
+
+          const alpha = Math.sin(this.globalTime * 2 + c * 0.4 + r * 0.3) * 0.12 + 0.13;
+          ctx.globalAlpha = Math.max(0, alpha);
+
+          ctx.beginPath();
+          ctx.moveTo(px, py);
+          ctx.lineTo(px + dc * 7, py + dr * 7);
+          ctx.stroke();
+        }
+      }
+    }
+
+    ctx.globalAlpha = 1;
     ctx.restore();
   }
 

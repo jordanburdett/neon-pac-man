@@ -11,12 +11,19 @@ import {
   POWER_PELLET_SCORE,
   INITIAL_LIVES,
   MAX_DT,
-  GHOST_STARTS,
   TUNNEL_ROW,
+  MODE_CYCLE_DURATIONS,
+  FRIGHTENED_DURATION,
+  FRIGHTENED_FLASH_START,
+  GHOST_EAT_SCORES,
+  SCORE_POPUP_TTL,
+  INKY_RELEASE_DOTS,
+  CLYDE_RELEASE_DOTS,
 } from './constants';
 import { MAZE_LAYOUT, isTileWalkable, tileCenterPx, pixelToTile, countPellets } from './mazeData';
-import { Direction, GameState } from './types';
-import type { Vec2, GhostData } from './types';
+import { Direction, GameState, GhostMode, GhostId } from './types';
+import type { Vec2, ScorePopup } from './types';
+import { Ghost } from './Ghost';
 
 export class GameEngine {
   private ctx: CanvasRenderingContext2D;
@@ -37,8 +44,27 @@ export class GameEngine {
   private pacDir: Direction = Direction.LEFT;
   private pacNextDir: Direction = Direction.LEFT;
 
-  // Ghost placeholders (static in story-001)
-  private ghosts: GhostData[] = GHOST_STARTS.map(g => ({ ...g }));
+  // Ghosts
+  private ghosts: Ghost[];
+  private blinky: Ghost;
+  private pinky: Ghost;
+  private inky: Ghost;
+  private clyde: Ghost;
+
+  // Mode cycling state machine
+  // Indices 0,2,4,6 = scatter; 1,3,5,7 = chase
+  private modeCycleIndex = 0;
+  private modeCycleTimer = 0;
+  private globalMode: GhostMode = GhostMode.SCATTER;
+
+  // Frightened mode
+  private frightenedTimer = 0;
+
+  // Ghost eating combo (resets each power pellet)
+  private ghostEatCombo = 0;
+
+  // Score popups
+  private scorePopups: ScorePopup[] = [];
 
   // Dying animation
   private dyingTimer = 0;
@@ -67,6 +93,21 @@ export class GameEngine {
     // Pac-Man starts at the center of tile (14, 23)
     const start = tileCenterPx(PACMAN_START_COL, PACMAN_START_ROW);
     this.pacPos = { x: start.x, y: start.y };
+
+    // Initialise ghosts
+    // Blinky: starts outside ghost house, immediately released
+    this.blinky = new Ghost(GhostId.BLINKY, '#FF0000', 14, 11, true);
+    // Pinky: inside house but exits immediately — triggered on first frame
+    this.pinky  = new Ghost(GhostId.PINKY,  '#FF69B4', 13, 14, false);
+    // Inky: inside house, exits after 30 pellets
+    this.inky   = new Ghost(GhostId.INKY,   '#00FFFF', 11, 14, false);
+    // Clyde: inside house, exits after 60 pellets
+    this.clyde  = new Ghost(GhostId.CLYDE,  '#FFA500', 16, 14, false);
+
+    this.ghosts = [this.blinky, this.pinky, this.inky, this.clyde];
+
+    // Pinky exits immediately
+    this.pinky.startExiting(this.grid);
 
     this.onKeyDown = this.handleKeyDown.bind(this);
     window.addEventListener('keydown', this.onKeyDown);
@@ -113,7 +154,12 @@ export class GameEngine {
     this.lives = INITIAL_LIVES;
     this.level = 1;
     this.state = GameState.PLAYING;
+    this.resetModeTimer();
+    this.frightenedTimer = 0;
+    this.ghostEatCombo = 0;
+    this.scorePopups = [];
     this.respawnPacMan();
+    this.resetGhosts();
   }
 
   private respawnPacMan(): void {
@@ -121,6 +167,24 @@ export class GameEngine {
     this.pacPos = { x: start.x, y: start.y };
     this.pacDir = Direction.LEFT;
     this.pacNextDir = Direction.LEFT;
+  }
+
+  private resetModeTimer(): void {
+    this.modeCycleIndex = 0;
+    this.modeCycleTimer = 0;
+    this.globalMode = GhostMode.SCATTER;
+  }
+
+  private resetGhosts(): void {
+    this.blinky.reset(this.grid, true);
+    this.pinky.reset(this.grid, false);
+    this.inky.reset(this.grid, false);
+    this.clyde.reset(this.grid, false);
+    for (const g of this.ghosts) {
+      g.level = this.level;
+    }
+    // Pinky exits immediately
+    this.pinky.startExiting(this.grid);
   }
 
   private startLoop(): void {
@@ -144,6 +208,9 @@ export class GameEngine {
       if (this.dyingTimer <= 0) {
         if (this.lives > 0) {
           this.respawnPacMan();
+          this.resetGhosts();
+          this.frightenedTimer = 0;
+          this.ghostEatCombo = 0;
           this.state = GameState.PLAYING;
         } else {
           this.state = GameState.GAME_OVER;
@@ -162,9 +229,64 @@ export class GameEngine {
 
     if (this.state !== GameState.PLAYING) return;
 
+    // Update score popups
+    this.scorePopups = this.scorePopups.filter(p => p.ttl > 0);
+    for (const p of this.scorePopups) p.ttl -= dt;
+
+    // Mode cycle timer (paused during frightened)
+    if (this.frightenedTimer <= 0) {
+      this.updateModeCycle(dt);
+    }
+
+    // Frightened timer
+    if (this.frightenedTimer > 0) {
+      this.frightenedTimer -= dt;
+      if (this.frightenedTimer <= 0) {
+        this.frightenedTimer = 0;
+        this.ghostEatCombo = 0;
+        for (const g of this.ghosts) {
+          g.onFrightenedEnd(this.globalMode);
+        }
+      }
+    }
+
+    // Ghost release based on pellets eaten
+    if (!this.inky.isReleased && !this.inky['isExiting'] && this.pelletsEaten >= INKY_RELEASE_DOTS) {
+      this.inky.startExiting(this.grid);
+    }
+    if (!this.clyde.isReleased && !this.clyde['isExiting'] && this.pelletsEaten >= CLYDE_RELEASE_DOTS) {
+      this.clyde.startExiting(this.grid);
+    }
+
     this.movePacMan(dt);
     this.checkPelletCollision();
+    this.updateGhosts(dt);
     this.checkGhostCollision();
+  }
+
+  private updateModeCycle(dt: number): void {
+    const duration = MODE_CYCLE_DURATIONS[this.modeCycleIndex] ?? Infinity;
+    if (duration === Infinity) return; // indefinite chase
+
+    this.modeCycleTimer += dt;
+    if (this.modeCycleTimer >= duration) {
+      this.modeCycleTimer -= duration;
+      this.modeCycleIndex = Math.min(this.modeCycleIndex + 1, MODE_CYCLE_DURATIONS.length - 1);
+      // Even indices = SCATTER, odd indices = CHASE
+      this.globalMode = this.modeCycleIndex % 2 === 0 ? GhostMode.SCATTER : GhostMode.CHASE;
+      for (const g of this.ghosts) {
+        g.onGlobalModeChange(this.globalMode);
+      }
+    }
+  }
+
+  private updateGhosts(dt: number): void {
+    const pacTile = pixelToTile(this.pacPos.x, this.pacPos.y);
+    const blinkyTile = this.blinky.tilePos;
+
+    for (const g of this.ghosts) {
+      g.update(dt, this.grid, pacTile, this.pacDir, blinkyTile);
+    }
   }
 
   private advanceLevel(): void {
@@ -174,14 +296,18 @@ export class GameEngine {
     this.totalPellets = pellets + powerPellets;
     this.pelletsEaten = 0;
     this.state = GameState.PLAYING;
+    this.resetModeTimer();
+    this.frightenedTimer = 0;
+    this.ghostEatCombo = 0;
+    this.scorePopups = [];
     this.respawnPacMan();
+    this.resetGhosts();
   }
 
   private movePacMan(dt: number): void {
     const speed = PACMAN_SPEED;
 
-    // Try switching to next direction if grid-aligned (positions are tile centers,
-    // so measure distance from the nearest center, not from the tile edge)
+    // Try switching to next direction if grid-aligned
     const aligned =
       Math.abs((this.pacPos.x % TILE_SIZE) - TILE_SIZE / 2) < 2 &&
       Math.abs((this.pacPos.y % TILE_SIZE) - TILE_SIZE / 2) < 2;
@@ -193,19 +319,15 @@ export class GameEngine {
       const nextRow = row + dr;
       if (isTileWalkable(this.grid, nextCol, nextRow)) {
         this.pacDir = this.pacNextDir;
-        // Snap to grid center to prevent drift
         this.pacPos.x = col * TILE_SIZE + TILE_SIZE / 2;
         this.pacPos.y = row * TILE_SIZE + TILE_SIZE / 2;
       }
     }
 
-    // Move in current direction
     const { dc, dr } = dirDelta(this.pacDir);
     const newX = this.pacPos.x + dc * speed * dt;
     const newY = this.pacPos.y + dr * speed * dt;
 
-    // Check if the new position would collide with a wall
-    // Use the leading edge in the direction of movement
     const radius = TILE_SIZE * 0.4;
     const leadX = newX + dc * radius;
     const leadY = newY + dr * radius;
@@ -215,7 +337,6 @@ export class GameEngine {
       this.pacPos.x = newX;
       this.pacPos.y = newY;
     } else {
-      // Stop movement — snap to the nearest grid center to avoid embedding
       const curTile = pixelToTile(this.pacPos.x, this.pacPos.y);
       this.pacPos.x = curTile.col * TILE_SIZE + TILE_SIZE / 2;
       this.pacPos.y = curTile.row * TILE_SIZE + TILE_SIZE / 2;
@@ -251,6 +372,12 @@ export class GameEngine {
       gridRow[col] = 0;
       this.score += POWER_PELLET_SCORE;
       this.pelletsEaten++;
+      // Trigger frightened mode
+      this.frightenedTimer = FRIGHTENED_DURATION;
+      this.ghostEatCombo = 0;
+      for (const g of this.ghosts) {
+        g.onFrightened();
+      }
       if (this.pelletsEaten >= this.totalPellets) {
         this.state = GameState.LEVEL_COMPLETE;
         this.levelCompleteTimer = this.LEVEL_COMPLETE_DURATION;
@@ -259,20 +386,38 @@ export class GameEngine {
   }
 
   private checkGhostCollision(): void {
-    const collisionRadius = TILE_SIZE * 0.7;
+    const collisionRadius = TILE_SIZE * 0.75;
     for (const ghost of this.ghosts) {
-      const ghostPx = tileCenterPx(ghost.col, ghost.row);
-      const dx = this.pacPos.x - ghostPx.x;
-      const dy = this.pacPos.y - ghostPx.y;
+      const dx = this.pacPos.x - ghost.pixelPos.x;
+      const dy = this.pacPos.y - ghost.pixelPos.y;
       const dist = Math.sqrt(dx * dx + dy * dy);
-      if (dist < collisionRadius) {
+      if (dist >= collisionRadius) continue;
+
+      if (ghost.mode === GhostMode.FRIGHTENED) {
+        // Eat the ghost
+        const pts = GHOST_EAT_SCORES[Math.min(this.ghostEatCombo, GHOST_EAT_SCORES.length - 1)] ?? 1600;
+        this.score += pts;
+        this.ghostEatCombo++;
+        ghost.onEaten(this.grid);
+        // Score popup at ghost position
+        this.scorePopups.push({
+          x: ghost.pixelPos.x,
+          y: ghost.pixelPos.y,
+          value: pts,
+          ttl: SCORE_POPUP_TTL,
+        });
+      } else if (ghost.mode === GhostMode.CHASE || ghost.mode === GhostMode.SCATTER) {
+        // Pac-Man dies
         this.lives--;
         this.state = GameState.DYING;
         this.dyingTimer = this.DYING_DURATION;
         return;
       }
+      // EATEN ghosts don't hurt Pac-Man
     }
   }
+
+  // ─── rendering ───────────────────────────────────────────────────────────
 
   private render(): void {
     const ctx = this.ctx;
@@ -283,6 +428,7 @@ export class GameEngine {
     this.renderPellets();
     this.renderGhosts();
     this.renderPacMan();
+    this.renderScorePopups();
     this.renderHUD();
 
     if (this.state === GameState.DYING) {
@@ -334,24 +480,54 @@ export class GameEngine {
   private renderGhosts(): void {
     const ctx = this.ctx;
     const radius = TILE_SIZE * 0.45;
+
     for (const ghost of this.ghosts) {
-      const px = tileCenterPx(ghost.col, ghost.row);
-      ctx.fillStyle = ghost.color;
+      let color = ghost.color;
+
+      if (ghost.mode === GhostMode.FRIGHTENED) {
+        // Flash between blue and white in the last 2 seconds
+        if (this.frightenedTimer < FRIGHTENED_FLASH_START) {
+          const flash = Math.floor(this.frightenedTimer / 0.25) % 2 === 0;
+          color = flash ? '#1a1aff' : '#ffffff';
+        } else {
+          color = '#1a1aff';
+        }
+      } else if (ghost.mode === GhostMode.EATEN) {
+        // Render as two eyes only
+        this.renderGhostEyes(ghost.pixelPos.x, ghost.pixelPos.y);
+        continue;
+      }
+
+      ctx.fillStyle = color;
       ctx.beginPath();
-      ctx.arc(px.x, px.y, radius, 0, Math.PI * 2);
+      ctx.arc(ghost.pixelPos.x, ghost.pixelPos.y, radius, 0, Math.PI * 2);
       ctx.fill();
     }
   }
 
+  private renderGhostEyes(x: number, y: number): void {
+    const ctx = this.ctx;
+    const eyeRadius = TILE_SIZE * 0.15;
+    const eyeOffsetX = TILE_SIZE * 0.15;
+    const eyeOffsetY = TILE_SIZE * 0.1;
+
+    ctx.fillStyle = '#ffffff';
+    ctx.beginPath();
+    ctx.arc(x - eyeOffsetX, y - eyeOffsetY, eyeRadius, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.beginPath();
+    ctx.arc(x + eyeOffsetX, y - eyeOffsetY, eyeRadius, 0, Math.PI * 2);
+    ctx.fill();
+  }
+
   private renderPacMan(): void {
     if (this.state === GameState.DYING && this.dyingTimer < this.DYING_DURATION * 0.5) {
-      return; // Flash out during dying
+      return;
     }
     const ctx = this.ctx;
     const radius = TILE_SIZE * 0.45;
     const mouthAngle = 0.25 * Math.PI;
 
-    // Rotation based on direction
     const rotations: Record<Direction, number> = {
       RIGHT: 0,
       DOWN: Math.PI / 2,
@@ -375,6 +551,20 @@ export class GameEngine {
     ctx.fill();
   }
 
+  private renderScorePopups(): void {
+    const ctx = this.ctx;
+    ctx.font = 'bold 12px monospace';
+    ctx.textAlign = 'center';
+    for (const p of this.scorePopups) {
+      const alpha = Math.min(1, p.ttl / SCORE_POPUP_TTL);
+      ctx.globalAlpha = alpha;
+      ctx.fillStyle = '#ffffff';
+      ctx.fillText(`${p.value}`, p.x, p.y);
+    }
+    ctx.globalAlpha = 1;
+    ctx.textAlign = 'left';
+  }
+
   private renderHUD(): void {
     const ctx = this.ctx;
     ctx.fillStyle = '#FFE000';
@@ -382,7 +572,7 @@ export class GameEngine {
     ctx.fillText(`SCORE: ${this.score}`, 8, CANVAS_HEIGHT - 8);
     ctx.fillText(`LEVEL: ${this.level}`, CANVAS_WIDTH / 2 - 30, CANVAS_HEIGHT - 8);
 
-    // Lives as small dots
+    // Lives as small Pac-Man arcs
     ctx.fillStyle = '#FFE000';
     for (let i = 0; i < this.lives; i++) {
       const lx = CANVAS_WIDTH - 20 - i * 18;
@@ -441,11 +631,15 @@ export class GameEngine {
     ctx.textAlign = 'left';
   }
 
-  // Expose score/lives/state for testing
+  // ─── accessors for testing ────────────────────────────────────────────────
   getScore(): number { return this.score; }
   getLives(): number { return this.lives; }
   getState(): GameState { return this.state; }
   getPelletsEaten(): number { return this.pelletsEaten; }
+  getGhosts(): Ghost[] { return this.ghosts; }
+  getGlobalMode(): GhostMode { return this.globalMode; }
+  getFrightenedTimer(): number { return this.frightenedTimer; }
+  getModeCycleIndex(): number { return this.modeCycleIndex; }
 }
 
 // Helper: direction to column/row deltas

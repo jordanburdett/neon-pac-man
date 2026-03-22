@@ -94,3 +94,6 @@ export const LEVEL_FLASH_INTERVAL = 0.1; // seconds per toggle
 
 // Haunting Score corruption tier thresholds (score points)
 export const CORRUPTION_TIERS = [0, 500, 1500, 3000, 6000] as const;
+
+// Shockwave speed (pixels per second) — used for pulse effect and per-ghost frightened delay
+export const SHOCKWAVE_SPEED = 200;

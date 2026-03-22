@@ -27,6 +27,7 @@ import {
   LEVEL_FLASH_DURATION,
   LEVEL_FLASH_INTERVAL,
   CORRUPTION_TIERS,
+  SHOCKWAVE_SPEED,
 } from './constants';
 import { MAZE_LAYOUT, isTileWalkable, tileCenterPx, pixelToTile, countPellets } from './mazeData';
 import { Direction, GameState, GhostMode, GhostId } from './types';
@@ -137,6 +138,9 @@ export class GameEngine {
 
   // Shockwave visual (power pellet eat)
   private shockwave: { x: number; y: number; radius: number } | null = null;
+
+  // Per-ghost frightened delay: map from ghost to remaining countdown seconds
+  private frightenedCountdowns: Map<Ghost, number> = new Map();
 
   // Dying animation
   private dyingTimer = 0;
@@ -295,6 +299,7 @@ export class GameEngine {
           this.respawnPacMan();
           this.resetGhosts();
           this.frightenedTimer = 0;
+          this.frightenedCountdowns.clear();
           this.ghostEatCombo = 0;
           this.state = GameState.PLAYING;
         } else {
@@ -338,6 +343,19 @@ export class GameEngine {
         this.ghostEatCombo = 0;
         for (const g of this.ghosts) {
           g.onFrightenedEnd(this.globalMode);
+        }
+      }
+    }
+
+    // Per-ghost frightened countdown (shockwave arrival delay)
+    if (this.frightenedCountdowns.size > 0) {
+      for (const [ghost, countdown] of [...this.frightenedCountdowns.entries()]) {
+        const newCountdown = countdown - dt;
+        if (newCountdown <= 0) {
+          ghost.onFrightened();
+          this.frightenedCountdowns.delete(ghost);
+        } else {
+          this.frightenedCountdowns.set(ghost, newCountdown);
         }
       }
     }
@@ -480,11 +498,20 @@ export class GameEngine {
       this.score += POWER_PELLET_SCORE;
       this.pelletsEaten++;
       this.highScore = maybeUpdateHighScore(this.score);
-      // Trigger frightened mode
+      // Trigger frightened mode — ghosts flip based on shockwave arrival distance
       this.frightenedTimer = this.currentFrightenedDuration;
       this.ghostEatCombo = 0;
+      this.frightenedCountdowns.clear();
       for (const g of this.ghosts) {
-        g.onFrightened();
+        const dx = g.pixelPos.x - this.pacPos.x;
+        const dy = g.pixelPos.y - this.pacPos.y;
+        const dist = Math.sqrt(dx * dx + dy * dy);
+        const delay = dist / SHOCKWAVE_SPEED;
+        if (delay <= 0.05) {
+          g.onFrightened(); // essentially instant
+        } else {
+          this.frightenedCountdowns.set(g, delay);
+        }
       }
       this.shockwave = { x: this.pacPos.x, y: this.pacPos.y, radius: 0 };
       if (this.pelletsEaten >= this.totalPellets) {
@@ -759,11 +786,27 @@ export class GameEngine {
 
   private renderGhosts(): void {
     const radius = TILE_SIZE * 0.45;
+    const ctx = this.ctx;
 
     for (const ghost of this.ghosts) {
       if (ghost.mode === GhostMode.EATEN) {
         this.renderGhostEyes(ghost.pixelPos.x, ghost.pixelPos.y, ghost.direction);
         continue;
+      }
+
+      // Wave-incoming hint: faint cyan pulsing outline for ghosts with pending countdown
+      if (this.frightenedCountdowns.has(ghost)) {
+        const pulse = 0.5 + 0.5 * Math.sin(this.globalTime * 8);
+        const hintAlpha = 0.10 + 0.08 * pulse; // range ~0.10–0.18
+        ctx.save();
+        ctx.beginPath();
+        ctx.arc(ghost.pixelPos.x, ghost.pixelPos.y, radius + 2, 0, Math.PI * 2);
+        ctx.strokeStyle = `rgba(0,255,255,${hintAlpha})`;
+        ctx.lineWidth = 2;
+        ctx.shadowColor = '#00FFFF';
+        ctx.shadowBlur = 8;
+        ctx.stroke();
+        ctx.restore();
       }
 
       let bodyColor = ghost.color;
